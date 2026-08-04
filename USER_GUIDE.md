@@ -22,7 +22,7 @@ Replace `spearca` with `localhost` if you're on the box itself.
 | llama-swap UI | `http://spearca:28080/ui/`   | none                                                        | Watch/manually load/evict models, tail model logs   |
 | Grafana       | `http://spearca:3000`        | `admin` / `GRAFANA_ADMIN_PASSWORD`                          | Usage + GPU dashboards                               |
 | Prometheus    | `http://spearca:9090`        | none                                                        | Raw metrics / query UI                              |
-| Portainer     | `https://spearca:9443`       | (set on first login)                                        | Container management UI                             |
+| Portainer     | `https://spearca:9444`       | (set on first login)                                        | Container management UI (host port, `.env` `PORTAINER_PORT`) |
 
 ### Available models
 
