@@ -285,6 +285,25 @@ services:
     networks: [dgx_net]
 
 
+  # ==========================================
+  # 9. PORTAINER (Container management UI)
+  # ==========================================
+  # Web UI for managing all the containers in this stack. Reachable at
+  # https://spearca:${PORTAINER_PORT} (self-signed TLS). Needs docker.sock to
+  # inspect/control containers. State (admin account, settings) lives in the
+  # portainer_data volume.
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "${PORTAINER_PORT:-9443}:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks: [dgx_net]
+
+
 # ==========================================
 # GLOBAL NETWORKS & VOLUMES
 # ==========================================
@@ -296,3 +315,7 @@ volumes:
   litellm_db_data:  # Persistent Postgres data for LiteLLM (keys, usage logs, budgets)
   prometheus_data:  # Persistent Prometheus TSDB
   grafana_data:     # Persistent Grafana settings/sessions
+  portainer_data:   # Persistent Portainer state (admin account, settings)
+    # Explicit name (no project prefix) so we reuse an existing standalone
+    # `portainer_data` volume if one is already there; auto-created otherwise.
+    name: portainer_data
