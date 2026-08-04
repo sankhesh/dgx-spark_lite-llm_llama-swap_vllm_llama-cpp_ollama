@@ -4,6 +4,8 @@
 > vLLM · llama.cpp · llama-swap · Ollama · LiteLLM — on 128 GB unified memory
 
 > For a narrative walkthrough with benchmark numbers and deeper explanations, see [TUTORIAL.md](TUTORIAL.md).
+>
+> Already set up and want to *use* the server (editor/CLI integration, model swapping, monitoring dashboards)? See [USER_GUIDE.md](USER_GUIDE.md).
 
 ---
 
