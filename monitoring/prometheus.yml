@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: litellm
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["litellm:4000"]
+
+  - job_name: llama-swap
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["llama-swap:8080"]
