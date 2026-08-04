@@ -37,13 +37,14 @@ version: '3.8'
 services:
 
   # ==========================================
-  # 1. VLLM (Primary Safetensors Engine) — DISABLED
+  # 1. VLLM (Primary Safetensors Engine)
   # ==========================================
   # NOTE: In practice, vLLM instances are typically managed by llama-swap
-  # (service 3) as ephemeral on-demand containers. Uncomment this block only
-  # if you want a *persistent* vLLM sidecar running alongside llama-swap.
-  # Requires vllm-spark image to be built and pushed to your registry first.
-  #
+  # (service 3) as ephemeral on-demand containers — see llama-swap/config.yaml
+  # for the actual per-model vLLM entries pointing at real model paths under
+  # LLM_ROOT_PATH/vllm. Uncomment this block only if you want a *persistent*
+  # vLLM sidecar pinned to one specific model; update the volume + --model
+  # path below to match a model you actually have on disk first.
   # vllm:
   #   image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-${GH_USER}}/vllm-spark:latest
   #   container_name: vllm
@@ -116,57 +117,6 @@ services:
       - "600"        # Request timeout in seconds
     stdin_open: true
     tty: true
-    networks: [dgx_net]
-
-
-  # ==========================================
-  # 2b. LLAMA-QWEN35-4B (Always-On Persistent GGUF Engine)
-  # ==========================================
-  # Dedicated persistent instance for Qwen3.5-4B-Q4_K_M.
-  # Stays loaded regardless of what llama-swap loads or evicts — no ttl, no cmdStop.
-  # Sized for the STT→LLM→TTS pipeline: low latency, always warm.
-  # llama-swap routes to it via endpoint: http://llama-qwen35-4b:19001
-  llama-qwen35-4b:
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-${GH_USER}}/llama-cpp-spark:latest
-    container_name: llama-qwen35-4b
-    restart: unless-stopped
-    ipc: host
-    security_opt:
-      - seccomp:unconfined
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    ports:
-      - "19001:19001"
-    volumes:
-      - /home/sparky/LLMs/ollama:/models/ollama
-    deploy:
-      resources:
-        reservations:
-          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
-    environment:
-      - GGML_CUDA_ENABLE_UNIFIED_MEMORY=1
-    command:
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "19001"
-      - -m
-      - /models/ollama/Alibaba/Qwen3.5-4B/Qwen3.5-4B-Q4_K_M.gguf
-      - --alias
-      - Qwen3.5-4B-Q4_K_M
-      - --parallel
-      - "2"
-      - --no-mmap
-      - --n-gpu-layers
-      - "99"
-      - --ctx-size
-      - "131072"
-      - --jinja
-      - --chat-template-kwargs
-      - '{"enable_thinking":false}'
-      - --timeout
-      - "600"
     networks: [dgx_net]
 
 
@@ -268,7 +218,6 @@ services:
     volumes:
       - ${REPO_CONFIG_PATH}/LiteLLM/config.yaml:/app/config.yaml
       - ${REPO_CONFIG_PATH}/LiteLLM/router.json:/app/router.json:ro
-      - ${REPO_CONFIG_PATH}/LiteLLM/complexity_hook.py:/app/complexity_hook.py:ro
     command:
       - "--config"
       - "/app/config.yaml"
