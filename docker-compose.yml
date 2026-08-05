@@ -289,6 +289,56 @@ services:
     networks: [dgx_net]
 
 
+  # ==========================================
+  # 10. LLAMA-EMBED (Always-on embedding service for RAG)
+  # ==========================================
+  # Tiny dedicated llama.cpp instance serving nomic-embed-text on /v1/embeddings.
+  # Always-on (NOT swap-managed): a RAG query does embed-then-generate, so the
+  # embedder must stay resident while llama-swap loads/evicts the chat model —
+  # otherwise every query would thrash-swap between the two. The model is ~140 MB.
+  llama-embed:
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-${GH_USER}}/llama-cpp-spark:latest
+    container_name: llama-embed
+    restart: unless-stopped
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "19100:8080"
+    volumes:
+      - ${LLM_ROOT_PATH}/gguf:/models/gguf
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+    environment:
+      - GGML_CUDA_ENABLE_UNIFIED_MEMORY=1
+    command:
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - -m
+      - /models/gguf/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.Q8_0.gguf
+      - --alias
+      - nomic-embed-text-v1.5
+      - --embeddings
+      - --pooling
+      - mean
+      - --ctx-size
+      - "2048"
+      # Physical batch must be >= the largest single input, else llama.cpp
+      # rejects chunks over the default 512 tokens ("input too large to process").
+      - --batch-size
+      - "2048"
+      - --ubatch-size
+      - "2048"
+      - --n-gpu-layers
+      - "99"
+    networks: [dgx_net]
+
+
 # ==========================================
 # GLOBAL NETWORKS & VOLUMES
 # ==========================================
