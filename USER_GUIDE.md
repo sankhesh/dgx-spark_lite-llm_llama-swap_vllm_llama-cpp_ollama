@@ -26,19 +26,24 @@ Replace `spearca` with `localhost` if you're on the box itself.
 
 ### Available models
 
-Served through LiteLLM → llama-swap → llama.cpp:
+Served through LiteLLM → llama-swap → (llama.cpp or vLLM):
 
-| Model name (use as `model` in API calls)          | Backend   | Cold-load  | Notes                        |
-|---------------------------------------------------|-----------|------------|------------------------------|
-| `Meta-Llama-3-8B-Instruct`                        | llama.cpp | ~5–15 s    | Great default                |
-| `Phi-4`                                           | llama.cpp | ~15–30 s   | 14B-class general            |
-| `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | ~30–60 s   | Bigger, first call slower    |
-| `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive`  | llama.cpp | ~30–60 s   | MoE                          |
+| Model name (use as `model` in API calls)          | Backend   | Cold-load    | Notes                                 |
+|---------------------------------------------------|-----------|--------------|---------------------------------------|
+| `Meta-Llama-3-8B-Instruct`                        | llama.cpp | ~5–15 s      | Great default                         |
+| `Phi-4`                                           | llama.cpp | ~15–30 s     | 14B-class general                     |
+| `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | ~30–60 s     | Bigger, first call slower             |
+| `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive`  | llama.cpp | ~30–60 s     | MoE                                   |
+| `Qwen2.5-Coder-32B-Instruct`                      | llama.cpp | ~20 s        | Fast code chat (**no** tool-calling)  |
+| `Qwen2.5-Coder-32B-tools`                         | vLLM      | **~8–10 min**| Same model, **structured tool-calls** for agentic editing (§3) |
+| `vtk-rag`                                          | proxy     | (loads Qwen) | RAG over the VTK repo (§3/§4)          |
 
-> **This is a llama.cpp-only stack.** vLLM was intentionally removed — its
-> multi-minute cold-loads jammed the single-model queue and weren't worth it for
-> single-user interactive work. All models above load fast and stream reliably.
-> If you ever need a safetensors-only model, see §6 for how to add vLLM back.
+> **Mostly a llama.cpp stack**, with one deliberate vLLM exception:
+> `Qwen2.5-Coder-32B-tools`. llama.cpp does not reliably emit structured
+> `tool_calls`, so agentic file-editing in codecompanion needs the vLLM build
+> (Hermes tool-call parser). Everything else stays on llama.cpp for fast loads;
+> use the `-tools` model **only** when you need agent tools, since its cold-load
+> is minutes (its `ttl` is 1 h to avoid repeated reloads within a session).
 
 List them live:
 
@@ -216,6 +221,39 @@ return {
 - To split local/cloud: leave `chat` on a cloud adapter and set only `inline` to
   `dgx_spark`, or vice-versa.
 
+### Agentic editing (tools) — use the `-tools` model
+
+codecompanion's agent tools (create/edit files, `@editor`, etc.) only run when
+the server returns **structured `tool_calls`**. The llama.cpp GGUF models here
+do **not** — they emit the call as plain text, so codecompanion just prints it
+and nothing happens. `Qwen2.5-Coder-32B-tools` (served by vLLM with the Hermes
+tool-call parser) returns proper `tool_calls`, so agent tools work.
+
+Select it for agent/editing work:
+
+```lua
+-- for a tools/agent chat, or via the chat buffer model picker:
+model = 'Qwen2.5-Coder-32B-tools'
+```
+
+Notes:
+- **Cold-load is minutes** (safetensors). The first agent request after idle
+  waits for the model to load; it stays warm for 1 h (`ttl`) after.
+- Keep fast llama.cpp models (`Meta-Llama-3-8B-Instruct`, etc.) as your default
+  for plain chat/inline; switch to `-tools` only when you need agent tools.
+- `vtk-rag` does **not** support tools (the RAG proxy strips them) — it's for
+  retrieval Q&A, not agentic editing.
+
+Quick check that the endpoint returns structured tool_calls:
+
+```bash
+curl -s http://spearca:14000/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"Qwen2.5-Coder-32B-tools","messages":[{"role":"user","content":"create /tmp/x.txt with hi"}],
+       "tools":[{"type":"function","function":{"name":"create_file","parameters":{"type":"object",
+       "properties":{"filepath":{"type":"string"},"content":{"type":"string"}}}}}],"tool_choice":"auto"}' \
+  | python3 -c "import json,sys;print('tool_calls:', json.load(sys.stdin)['choices'][0]['message'].get('tool_calls'))"
+```
+
 ---
 
 ## 4. Monitoring — Grafana + Prometheus
@@ -326,19 +364,24 @@ docker compose logs -f litellm       # follow logs
    (`api_base: http://llama-swap:8080/v1`).
 4. `docker compose restart llama-swap litellm`.
 
-### Adding vLLM back (safetensors-only models)
+### Adding more vLLM models
 
-This stack is llama.cpp-only by choice. If you ever need a model that's only
-available as safetensors, or want vLLM's throughput for a specific model:
+The stack is mostly llama.cpp, with vLLM used where it's needed (currently
+`Qwen2.5-Coder-32B-tools`, for structured tool-calling — see §3). To add another
+safetensors model, or one needing a specific vLLM feature (a tool-call parser, a
+quant kernel, etc.):
 
-1. Rebuild/push the image: `docker build -t $REGISTRY/$IMAGE_NAMESPACE/vllm-spark:latest -f vllm/vllm.Dockerfile vllm && docker push …`.
-2. Add a model entry in `llama-swap/config.yaml` (see this file's git history for
-   working vLLM `docker run` examples), including
-   `-v ${LLM_ROOT_PATH}/.vllm-cache:/root/.cache` for faster reloads.
-3. Expect **multi-minute cold-loads**. For anything large, don't swap it on
-   demand — run it as a dedicated always-on service (a persistent `vllm:` block
-   in `docker-compose.yml` with a fixed port and a matching LiteLLM entry). A
-   big model pins ~90+ GiB of the 128 GiB unified memory for as long as it runs.
+1. The `vllm-spark` image already exists. If you ever need to rebuild it:
+   `docker build -t $REGISTRY/$IMAGE_NAMESPACE/vllm-spark:latest -f vllm/vllm.Dockerfile vllm && docker push …`.
+2. Download the safetensors under `${LLM_ROOT_PATH}/vllm/…`, then copy the
+   `Qwen2.5-Coder-32B-tools` block in `llama-swap/config.yaml` and adjust the
+   `-v …:/model` path, `--served-model-name`, and vLLM flags. Keep the
+   `-v ${LLM_ROOT_PATH}/.vllm-cache:/root/.cache` mount for faster reloads.
+3. Add a matching `model_list` entry in `LiteLLM/config.yaml`, then
+   `docker compose restart litellm`.
+4. Expect **multi-minute cold-loads**. For a model you want always hot, run it
+   as a dedicated persistent service instead of swap-managed — it pins its
+   memory (a 32B bf16 ≈ 65 GiB) for as long as it runs.
 
 ### Ollama
 
