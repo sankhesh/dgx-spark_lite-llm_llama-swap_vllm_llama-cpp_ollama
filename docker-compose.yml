@@ -37,30 +37,15 @@ version: '3.8'
 services:
 
   # ==========================================
-  # 1. VLLM (Primary Safetensors Engine)
+  # vLLM — intentionally NOT part of this stack
   # ==========================================
-  # NOTE: In practice, vLLM instances are typically managed by llama-swap
-  # (service 3) as ephemeral on-demand containers — see llama-swap/config.yaml
-  # for the actual per-model vLLM entries pointing at real model paths under
-  # LLM_ROOT_PATH/vllm. Uncomment this block only if you want a *persistent*
-  # vLLM sidecar pinned to one specific model; update the volume + --model
-  # path below to match a model you actually have on disk first.
-  # vllm:
-  #   image: ${REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-${GH_USER}}/vllm-spark:latest
-  #   container_name: vllm
-  #   restart: unless-stopped
-  #   ipc: host
-  #   ports:
-  #     - "18000:8000"  # vLLM internal is always 8000; exposed as 18000
-  #   volumes:
-  #     - ${LLM_ROOT_PATH}/safetensors:/model
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
-  #   command: >
-  #     --model /model/Qwen3.5-7B-Instruct --host 0.0.0.0 --port 8000
-  #   networks: [dgx_net]
+  # This is a single-user, interactive setup, so inference is served entirely by
+  # llama.cpp (fast on-demand loads) via llama-swap. vLLM's slow multi-minute
+  # cold-loads jam the single-model queue and aren't worth it here. If you ever
+  # want a large safetensors model served by vLLM, rebuild the vllm-spark image
+  # (vllm/vllm.Dockerfile), add a model entry in llama-swap/config.yaml, and
+  # for anything huge run it as a dedicated always-on service rather than
+  # swap-managed. See git history for the previous vLLM sidecar/model examples.
 
 
   # ==========================================
