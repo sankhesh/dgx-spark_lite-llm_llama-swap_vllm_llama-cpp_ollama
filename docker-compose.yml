@@ -339,6 +339,35 @@ services:
     networks: [dgx_net]
 
 
+  # ==========================================
+  # 11. RAG-PROXY (OpenAI-compatible RAG endpoint)
+  # ==========================================
+  # Exposes /v1/chat/completions for model `vtk-rag`: embeds the query, retrieves
+  # from the VTK index, and forwards to the code model — all server-side. Talks
+  # directly to llama-embed + llama-swap (not back through LiteLLM, so no loop).
+  # Registered in LiteLLM/config.yaml as model `vtk-rag`, so remote clients just
+  # select that model at spearca:14000. Built locally from rag/Dockerfile.
+  # Rebuild the index with rag/index.py, then `docker compose restart rag-proxy`.
+  rag-proxy:
+    build: ./rag
+    image: dgx-rag-proxy:local
+    container_name: rag-proxy
+    restart: unless-stopped
+    ports:
+      - "18090:8080"   # host access for debugging; LiteLLM uses rag-proxy:8080 on dgx_net
+    environment:
+      - EMBED_URL=http://llama-embed:8080/v1
+      - CHAT_URL=http://llama-swap:8080/v1
+      - EMBED_MODEL=nomic-embed-text-v1.5
+      - CHAT_MODEL=Qwen2.5-Coder-32B-Instruct
+      - INDEX_DIR=/index
+      - TOP_K=8
+      - SERVED_NAME=vtk-rag
+    volumes:
+      - ${REPO_CONFIG_PATH}/rag/index:/index:ro
+    networks: [dgx_net]
+
+
 # ==========================================
 # GLOBAL NETWORKS & VOLUMES
 # ==========================================
