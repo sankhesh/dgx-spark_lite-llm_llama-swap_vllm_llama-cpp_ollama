@@ -28,15 +28,23 @@ Replace `spearca` with `localhost` if you're on the box itself.
 
 Served through LiteLLM → llama-swap → (llama.cpp or vLLM):
 
-| Model name (use as `model` in API calls)          | Backend   | Notes                                  |
-|---------------------------------------------------|-----------|----------------------------------------|
-| `Meta-Llama-3-8B-Instruct`                        | llama.cpp | Small, fast — good default chat        |
-| `Phi-4`                                           | llama.cpp | 14B-class general                      |
-| `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | Large, slower to load                  |
-| `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive`  | llama.cpp | MoE                                    |
-| `NVIDIA-Nemotron-3-Nano-4B-FP8`                   | vLLM      | FP8                                    |
-| `Qwen2-7B`                                         | vLLM      |                                        |
-| `Qwen3-Coder-Next-FP8-Dynamic`                    | vLLM      | **Best for coding / inline edits**     |
+| Model name (use as `model` in API calls)          | Backend   | Cold-load  | Interactive use (editor/CLI)        |
+|---------------------------------------------------|-----------|------------|-------------------------------------|
+| `Meta-Llama-3-8B-Instruct`                        | llama.cpp | ~5–15 s    | ✅ Great default                     |
+| `Phi-4`                                           | llama.cpp | ~15–30 s   | ✅                                   |
+| `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | ~30–60 s   | ✅ (bigger, first call slower)       |
+| `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive`  | llama.cpp | ~30–60 s   | ✅                                   |
+| `NVIDIA-Nemotron-3-Nano-4B-FP8`                   | vLLM      | ~2–6 min   | ⚠️ Pre-warm first (see §2)           |
+| `Qwen2-7B`                                         | vLLM      | ~2–5 min   | ⚠️ Pre-warm first                    |
+| `Qwen3-Coder-Next-FP8-Dynamic`                    | vLLM      | **~10+ min** | ❌ Too big (78 GiB) to swap — pin it |
+
+> **Rule of thumb:** for anything interactive (codecompanion, aider, chat),
+> use a **llama.cpp** model — they cold-load in seconds and stream reliably.
+> The **vLLM** models cold-load in minutes and, because the stack loads one
+> model at a time, a slow load will make *every* request wait behind it. Only
+> point an editor at a vLLM model after pre-warming it (§2), and don't use the
+> 78 GiB coder model on-demand at all — pin it as an always-on service instead
+> (§6).
 
 List them live:
 
@@ -63,13 +71,40 @@ for normal use:
 
 ### First-load latency
 
-- **llama.cpp (GGUF)** models load in seconds.
-- **vLLM** models are slow *on their very first load ever* (~5–6 min) because
-  vLLM JIT-compiles and autotunes CUDA/Triton kernels for the GB10 architecture.
-  A persistent cache at `${LLM_ROOT_PATH}/.vllm-cache` (mounted into each vLLM
-  container at `/root/.cache`) stores these results, cutting subsequent cold
-  loads to ~2 min. The remaining time is CUDA-graph capture, which vLLM redoes
-  per process regardless of caching. Once warm, responses are sub-second.
+- **llama.cpp (GGUF)** models load in seconds (~5–60 s depending on size).
+- **vLLM** models are slow to cold-load — minutes, not seconds. First load ever
+  is worst (~5–6 min) because vLLM JIT-compiles and autotunes CUDA/Triton
+  kernels for the GB10; a persistent cache at `${LLM_ROOT_PATH}/.vllm-cache`
+  (mounted at `/root/.cache`) cuts later loads to ~2 min. But large weights
+  dominate: the 78 GiB `Qwen3-Coder-Next-FP8-Dynamic` takes **10+ min** just to
+  read shards from disk. Once warm, responses are sub-second.
+
+> ⚠️ **The stack loads one model at a time.** A slow load blocks *every* request
+> behind it until it finishes or times out. If you fire an interactive request
+> at a cold vLLM model, your editor/CLI will time out — and so will anything
+> else — while it loads. `healthCheckTimeout` in `llama-swap/config.yaml` caps
+> the wait at **300 s** so a doomed load fails fast instead of wedging the stack
+> for 15 minutes; don't raise it back up.
+
+### Pre-warming a vLLM model (before interactive use)
+
+Load it once and wait for it to report ready, *then* use it in your editor so
+there's no cold-load wait mid-request:
+
+```bash
+# Kick the load and wait (safe to Ctrl-C once it returns; the model stays warm for its ttl)
+curl http://spearca:14000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"NVIDIA-Nemotron-3-Nano-4B-FP8","messages":[{"role":"user","content":"warmup"}],"max_tokens":1}'
+
+# Or click the model in the llama-swap UI (http://spearca:28080/ui/) and watch it go green.
+```
+
+If a model ever gets stuck loading and jams the stack, clear it with:
+
+```bash
+docker compose up -d --force-recreate llama-swap
+```
 
 ### Watching / controlling swaps
 
@@ -91,6 +126,13 @@ adapter (LiteLLM speaks the OpenAI API). Below is your existing config with a
 you can switch between cloud and local by changing the `adapter`/`model` lines
 under `interactions`.
 
+> ⚠️ **Use a llama.cpp model as the default** (`Meta-Llama-3-8B-Instruct` below).
+> Pointing codecompanion at a **vLLM** model (`NVIDIA-Nemotron-3-Nano-4B-FP8`,
+> `Qwen2-7B`, `Qwen3-Coder-Next-FP8-Dynamic`) makes the first request hang for
+> minutes while the model cold-loads, and codecompanion times out (you'll see
+> `408`/`500`). If you want a vLLM model, **pre-warm it first** (§2). Also check
+> the chat buffer's model picker — a model chosen there overrides this default.
+
 ```lua
 -- lua/plugins/codecompanion.lua
 
@@ -105,17 +147,18 @@ return {
     require('codecompanion').setup({
       interactions = {
         chat = {
-          -- Local DGX Spark:
+          -- Local DGX Spark (llama.cpp — fast, reliable):
           adapter = 'dgx_spark',
-          model = 'Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive',
+          model = 'Meta-Llama-3-8B-Instruct',
           -- Cloud fallbacks:
           -- adapter = 'claude_code',
           -- model = 'haiku',
         },
         inline = {
-          -- Local coding model is a great fit for inline edits:
+          -- Local (llama.cpp). For a coder model, pre-warm the vLLM
+          -- Qwen3-Coder-Next-FP8-Dynamic first, or keep it on Copilot.
           adapter = 'dgx_spark',
-          model = 'Qwen3-Coder-Next-FP8-Dynamic',
+          model = 'Meta-Llama-3-8B-Instruct',
           -- adapter = 'copilot',
           -- model = 'gemini-3.1-pro',
         },
@@ -136,7 +179,10 @@ return {
               },
               schema = {
                 model = {
-                  default = 'Qwen3-Coder-Next-FP8-Dynamic',
+                  -- Fast llama.cpp default. Other good picks: Phi-4,
+                  -- Meta-Llama-3.1-70B-Instruct, Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive.
+                  -- vLLM models (Qwen3-Coder-Next-FP8-Dynamic, etc.) need pre-warming.
+                  default = 'Meta-Llama-3-8B-Instruct',
                 },
               },
             })
@@ -308,6 +354,25 @@ docker compose logs -f litellm       # follow logs
    should include `-v ${LLM_ROOT_PATH}/.vllm-cache:/root/.cache` for fast reloads.
 3. Add a matching entry to `model_list` in `LiteLLM/config.yaml`.
 4. `docker compose restart llama-swap litellm`.
+
+### Pinning a heavy model as an always-on service
+
+The 78 GiB `Qwen3-Coder-Next-FP8-Dynamic` is too slow (~10+ min) to load
+on-demand — it will time out interactive clients and jam the swap queue. If you
+want it for coding in Neovim, run it as a **dedicated, always-loaded** container
+instead of letting llama-swap swap it in and out:
+
+1. Uncomment/adapt the persistent vLLM sidecar block at the top of
+   `docker-compose.yml` (service 1), pointing its volume + `--model` at
+   `${LLM_ROOT_PATH}/vllm/unsloth/Qwen3-Coder-Next-FP8-Dynamic`, and add
+   `-v ${LLM_ROOT_PATH}/.vllm-cache:/root/.cache`.
+2. Give it a fixed port (e.g. 18000) and add a `LiteLLM/config.yaml` entry with
+   `api_base: http://vllm:8000/v1`.
+3. `docker compose up -d vllm && docker compose restart litellm`.
+
+This permanently reserves ~96 GiB of the 128 GiB unified memory, so you won't be
+able to run other large models alongside it — that's the trade-off for having it
+always hot.
 
 ### Ollama
 
