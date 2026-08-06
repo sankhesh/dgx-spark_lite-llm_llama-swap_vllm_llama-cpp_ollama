@@ -35,15 +35,17 @@ Served through LiteLLM → llama-swap → (llama.cpp or vLLM):
 | `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | ~30–60 s     | Bigger, first call slower             |
 | `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive`  | llama.cpp | ~30–60 s     | MoE                                   |
 | `Qwen2.5-Coder-32B-Instruct`                      | llama.cpp | ~20 s        | Fast code chat (**no** tool-calling)  |
-| `Qwen2.5-Coder-32B-tools`                         | vLLM      | **~8–10 min**| Same model, **structured tool-calls** for agentic editing (§3) |
+| `Qwen3-Coder-30B-tools`                           | vLLM      | **~8–10 min**| MoE coder with **structured tool-calls** for agentic editing (§3) |
 | `vtk-rag`                                          | proxy     | (loads Qwen) | RAG over the VTK repo (§3/§4)          |
 
 > **Mostly a llama.cpp stack**, with one deliberate vLLM exception:
-> `Qwen2.5-Coder-32B-tools`. llama.cpp does not reliably emit structured
-> `tool_calls`, so agentic file-editing in codecompanion needs the vLLM build
-> (Hermes tool-call parser). Everything else stays on llama.cpp for fast loads;
-> use the `-tools` model **only** when you need agent tools, since its cold-load
-> is minutes (its `ttl` is 1 h to avoid repeated reloads within a session).
+> `Qwen3-Coder-30B-tools`. llama.cpp (and Qwen2.5-Coder via vLLM's hermes parser)
+> don't reliably emit structured `tool_calls` in auto mode, so codecompanion's
+> agentic editing needs Qwen3-Coder with vLLM's dedicated `qwen3_coder` parser.
+> Everything else stays on llama.cpp for fast loads; use the `-tools` model
+> **only** when you need agent tools — its cold-load is minutes (its `ttl` is
+> 1 h to avoid repeated reloads within a session), though it's a fast MoE once
+> warm.
 
 List them live:
 
@@ -226,19 +228,22 @@ return {
 codecompanion's agent tools (create/edit files, `@editor`, etc.) only run when
 the server returns **structured `tool_calls`**. The llama.cpp GGUF models here
 do **not** — they emit the call as plain text, so codecompanion just prints it
-and nothing happens. `Qwen2.5-Coder-32B-tools` (served by vLLM with the Hermes
-tool-call parser) returns proper `tool_calls`, so agent tools work.
+and nothing happens. `Qwen3-Coder-30B-tools` (vLLM with the dedicated
+`qwen3_coder` parser) returns proper `tool_calls` in auto mode, so agent tools
+work. (Qwen2.5-Coder was tried first but only worked for *forced* tool calls,
+not the auto mode codecompanion uses — hence Qwen3-Coder.)
 
 Select it for agent/editing work:
 
 ```lua
 -- for a tools/agent chat, or via the chat buffer model picker:
-model = 'Qwen2.5-Coder-32B-tools'
+model = 'Qwen3-Coder-30B-tools'
 ```
 
 Notes:
-- **Cold-load is minutes** (safetensors). The first agent request after idle
-  waits for the model to load; it stays warm for 1 h (`ttl`) after.
+- **Cold-load is minutes** (safetensors + one-time MoE-kernel compile, cached
+  after). The first agent request after idle waits for the load; it stays warm
+  for 1 h (`ttl`) after, and it's a fast MoE (~3B active) once loaded.
 - Keep fast llama.cpp models (`Meta-Llama-3-8B-Instruct`, etc.) as your default
   for plain chat/inline; switch to `-tools` only when you need agent tools.
 - `vtk-rag` does **not** support tools (the RAG proxy strips them) — it's for
@@ -248,7 +253,7 @@ Quick check that the endpoint returns structured tool_calls:
 
 ```bash
 curl -s http://spearca:14000/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"Qwen2.5-Coder-32B-tools","messages":[{"role":"user","content":"create /tmp/x.txt with hi"}],
+  -d '{"model":"Qwen3-Coder-30B-tools","messages":[{"role":"user","content":"create /tmp/x.txt with hi"}],
        "tools":[{"type":"function","function":{"name":"create_file","parameters":{"type":"object",
        "properties":{"filepath":{"type":"string"},"content":{"type":"string"}}}}}],"tool_choice":"auto"}' \
   | python3 -c "import json,sys;print('tool_calls:', json.load(sys.stdin)['choices'][0]['message'].get('tool_calls'))"
@@ -367,14 +372,14 @@ docker compose logs -f litellm       # follow logs
 ### Adding more vLLM models
 
 The stack is mostly llama.cpp, with vLLM used where it's needed (currently
-`Qwen2.5-Coder-32B-tools`, for structured tool-calling — see §3). To add another
+`Qwen3-Coder-30B-tools`, for structured tool-calling — see §3). To add another
 safetensors model, or one needing a specific vLLM feature (a tool-call parser, a
 quant kernel, etc.):
 
 1. The `vllm-spark` image already exists. If you ever need to rebuild it:
    `docker build -t $REGISTRY/$IMAGE_NAMESPACE/vllm-spark:latest -f vllm/vllm.Dockerfile vllm && docker push …`.
 2. Download the safetensors under `${LLM_ROOT_PATH}/vllm/…`, then copy the
-   `Qwen2.5-Coder-32B-tools` block in `llama-swap/config.yaml` and adjust the
+   `Qwen3-Coder-30B-tools` block in `llama-swap/config.yaml` and adjust the
    `-v …:/model` path, `--served-model-name`, and vLLM flags. Keep the
    `-v ${LLM_ROOT_PATH}/.vllm-cache:/root/.cache` mount for faster reloads.
 3. Add a matching `model_list` entry in `LiteLLM/config.yaml`, then
@@ -382,6 +387,19 @@ quant kernel, etc.):
 4. Expect **multi-minute cold-loads**. For a model you want always hot, run it
    as a dedicated persistent service instead of swap-managed — it pins its
    memory (a 32B bf16 ≈ 65 GiB) for as long as it runs.
+
+> **MoE OOM gotcha (learned the hard way):** MoE models make FlashInfer JIT-
+> compile CUTLASS kernels for the GB10 (sm_121) on first load. With a high
+> `--gpu-memory-utilization`, the parallel `nvcc` compile gets OOM-killed
+> (exit 137, "Ninja build failed"). The `Qwen3-Coder-30B-tools` entry works
+> around it with `--gpu-memory-utilization 0.65` (headroom for the compiler)
+> plus `-e MAX_JOBS=2 -e NVCC_THREADS=1` (fewer parallel `nvcc` jobs). The
+> compile is cached in `.vllm-cache`, so it's a one-time cost. Copy those
+> settings for any other MoE model.
+>
+> Because `healthCheckTimeout` is global and must cover this slow load, it's set
+> to 900 s in `llama-swap/config.yaml` — a stuck load can block the queue that
+> long; clear it with `docker compose up -d --force-recreate llama-swap`.
 
 ### Ollama
 
