@@ -73,9 +73,15 @@ def retrieve(query):
 
 def build_messages(incoming):
     ctx = retrieve(last_user_text(incoming))
-    sys_msg = {"role": "system", "content": SYSTEM + "\n\nContext:\n\n" + ctx}
-    # Replace the client's system prompt with our grounded one; keep the rest.
-    return [sys_msg] + [m for m in incoming if m.get("role") != "system"]
+    context_msg = {"role": "system",
+                   "content": SYSTEM + "\n\nRelevant VTK source context "
+                   "(cite as path:start-end):\n\n" + ctx}
+    # PRESERVE the client's own system prompt(s) and tool instructions — an
+    # agent framework's tool-use rules live there — and inject the retrieved VTK
+    # context as an ADDITIONAL system message right after them.
+    systems = [m for m in incoming if m.get("role") == "system"]
+    others = [m for m in incoming if m.get("role") != "system"]
+    return systems + [context_msg] + others
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -110,7 +116,11 @@ class Handler(BaseHTTPRequestHandler):
             "messages": build_messages(req.get("messages", [])),
             "stream": stream,
         }
-        for k in ("max_tokens", "temperature", "top_p"):
+        # Forward generation params AND tool-calling fields, so a tools-capable
+        # CHAT_MODEL (e.g. Qwen3-Coder-30B-tools) can do agentic editing with
+        # the injected VTK context. tool_calls come back through the SSE relay
+        # / JSON passthrough unchanged.
+        for k in ("max_tokens", "temperature", "top_p", "tools", "tool_choice"):
             if k in req:
                 payload[k] = req[k]
 

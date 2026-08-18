@@ -367,6 +367,33 @@ services:
       - ${REPO_CONFIG_PATH}/rag/index:/index:ro
     networks: [dgx_net]
 
+  # ==========================================
+  # 12. RAG-PROXY-AGENT (RAG + agentic tool-calling)
+  # ==========================================
+  # Same rag-proxy code/image, but its CHAT_MODEL is the vLLM tools model
+  # (Qwen3-Coder-30B-tools) and it forwards `tools`/`tool_choice` — so this
+  # endpoint does VTK-grounded RAG *and* structured tool_calls, i.e. agentic
+  # editing with VTK context. Registered in LiteLLM as `vtk-rag-agent`.
+  # Trade-off vs plain vtk-rag: the vLLM model has a multi-minute cold-load.
+  rag-proxy-agent:
+    build: ./rag
+    image: dgx-rag-proxy:local
+    container_name: rag-proxy-agent
+    restart: unless-stopped
+    ports:
+      - "18091:8080"
+    environment:
+      - EMBED_URL=http://llama-embed:8080/v1
+      - CHAT_URL=http://llama-swap:8080/v1
+      - EMBED_MODEL=nomic-embed-text-v1.5
+      - CHAT_MODEL=Qwen3-Coder-30B-tools
+      - INDEX_DIR=/index
+      - TOP_K=8
+      - SERVED_NAME=vtk-rag-agent
+    volumes:
+      - ${REPO_CONFIG_PATH}/rag/index:/index:ro
+    networks: [dgx_net]
+
 
 # ==========================================
 # GLOBAL NETWORKS & VOLUMES
