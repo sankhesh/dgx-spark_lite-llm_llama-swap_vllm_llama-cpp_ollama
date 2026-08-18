@@ -36,7 +36,8 @@ Served through LiteLLM → llama-swap → (llama.cpp or vLLM):
 | `Qwen2.5-Coder-32B-Instruct`                      | llama.cpp | ~20 s        | Fast code chat (**no** tool-calling)  |
 | `Qwen3-Coder-30B-tools`                           | vLLM      | **~8–10 min**| MoE coder with **structured tool-calls** for agentic editing (§3) |
 | `gpt-oss-120b`                                    | vLLM      | **~8–10 min**| OpenAI open-weight MoE; strong reasoning + **tool-calls** (§3)     |
-| `vtk-rag`                                          | proxy     | (loads Qwen) | RAG over the VTK repo (§3/§4)          |
+| `vtk-rag`                                          | proxy     | (loads Qwen2.5) | RAG Q&A over the VTK repo, no tools (§3/§4) |
+| `vtk-rag-agent`                                    | proxy     | (loads Qwen3-tools) | RAG over VTK **+** agentic tool-calling (§3) |
 
 > **Mostly a llama.cpp stack**, with one deliberate vLLM exception:
 > `Qwen3-Coder-30B-tools`. llama.cpp (and Qwen2.5-Coder via vLLM's hermes parser)
@@ -248,8 +249,12 @@ Notes:
   for 1 h (`ttl`) after, and it's a fast MoE (~3B active) once loaded.
 - Keep fast llama.cpp models (`Meta-Llama-3-8B-Instruct`, etc.) as your default
   for plain chat/inline; switch to `-tools` only when you need agent tools.
-- `vtk-rag` does **not** support tools (the RAG proxy strips them) — it's for
-  retrieval Q&A, not agentic editing.
+- `vtk-rag` is retrieval **Q&A only** (no tools) on the fast Qwen2.5-Coder GGUF.
+  For agentic editing *with* VTK context, use **`vtk-rag-agent`** — same
+  retrieval, but it forwards tools to `Qwen3-Coder-30B-tools`, so it returns
+  structured `tool_calls` grounded in VTK. (Trade-off: it runs the slow vLLM
+  tools model, so first use cold-loads for minutes.) Both are served by their
+  own `rag-proxy` / `rag-proxy-agent` container over the same VTK index.
 
 Quick check that the endpoint returns structured tool_calls:
 
