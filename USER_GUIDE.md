@@ -33,7 +33,6 @@ Served through LiteLLM → llama-swap → (llama.cpp or vLLM):
 | `Meta-Llama-3-8B-Instruct`                        | llama.cpp | ~5–15 s      | Great default                         |
 | `Phi-4`                                           | llama.cpp | ~15–30 s     | 14B-class general                     |
 | `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | ~30–60 s     | Bigger, first call slower             |
-| `Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive`  | llama.cpp | ~30–60 s     | MoE                                   |
 | `Qwen2.5-Coder-32B-Instruct`                      | llama.cpp | ~20 s        | Fast code chat (**no** tool-calling)  |
 | `Qwen3-Coder-30B-tools`                           | vLLM      | **~8–10 min**| MoE coder with **structured tool-calls** for agentic editing (§3) |
 | `vtk-rag`                                          | proxy     | (loads Qwen) | RAG over the VTK repo (§3/§4)          |
@@ -158,8 +157,7 @@ return {
               },
               schema = {
                 model = {
-                  -- Default model. Other picks: Phi-4,
-                  -- Meta-Llama-3.1-70B-Instruct, Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive.
+                  -- Default model. Other picks: Phi-4, Meta-Llama-3.1-70B-Instruct.
                   default = 'Meta-Llama-3-8B-Instruct',
                 },
               },
@@ -318,7 +316,7 @@ claude --model Meta-Llama-3-8B-Instruct
 aider \
   --openai-api-base http://spearca:14000/v1 \
   --openai-api-key sk-dgx-local \
-  --model openai/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive
+  --model openai/Qwen2.5-Coder-32B-Instruct
 ```
 
 ### Simon Willison's `llm` (general-purpose, scriptable)
