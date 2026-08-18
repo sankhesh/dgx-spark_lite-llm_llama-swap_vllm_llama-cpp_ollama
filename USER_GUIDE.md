@@ -316,8 +316,19 @@ several CLIs work out of the box.
 ```bash
 export ANTHROPIC_BASE_URL=http://spearca:14000
 export ANTHROPIC_API_KEY=sk-dgx-local          # dummy; auth is disabled
-claude --model Meta-Llama-3-8B-Instruct
+claude --model Qwen3-Coder-30B-tools           # or gpt-oss-120b, Meta-Llama-3-8B-Instruct, …
 ```
+
+> ⚠️ **Claude Code only works with the direct model backends, not the RAG
+> models.** Claude Code calls LiteLLM's `/v1/messages?beta`, which LiteLLM
+> forwards to the backend's **`/v1/responses`** API. vLLM and llama.cpp
+> implement that, so `Qwen3-Coder-30B-tools`, `gpt-oss-120b`, `Meta-Llama-*`,
+> etc. all work. But `vtk-rag` / `vtk-rag-agent` are served by the small
+> `rag-proxy`, which only speaks `/chat/completions` — so Claude Code errors with
+> *"model may not exist"* for those. For **RAG in an agent**, use an OpenAI-
+> `/chat/completions` client instead (codecompanion, aider, `llm`, curl) with
+> `vtk-rag-agent`; use Claude Code with a direct tools model when you don't need
+> VTK retrieval.
 
 ### aider (git-aware coding agent)
 
