@@ -35,6 +35,7 @@ Served through LiteLLM → llama-swap → (llama.cpp or vLLM):
 | `Meta-Llama-3.1-70B-Instruct`                     | llama.cpp | ~30–60 s     | Bigger, first call slower             |
 | `Qwen2.5-Coder-32B-Instruct`                      | llama.cpp | ~20 s        | Fast code chat (**no** tool-calling)  |
 | `Qwen3-Coder-30B-tools`                           | vLLM      | **~8–10 min**| MoE coder with **structured tool-calls** for agentic editing (§3) |
+| `gpt-oss-120b`                                    | vLLM      | **~8–10 min**| OpenAI open-weight MoE; strong reasoning + **tool-calls** (§3)     |
 | `vtk-rag`                                          | proxy     | (loads Qwen) | RAG over the VTK repo (§3/§4)          |
 
 > **Mostly a llama.cpp stack**, with one deliberate vLLM exception:
@@ -226,16 +227,19 @@ return {
 codecompanion's agent tools (create/edit files, `@editor`, etc.) only run when
 the server returns **structured `tool_calls`**. The llama.cpp GGUF models here
 do **not** — they emit the call as plain text, so codecompanion just prints it
-and nothing happens. `Qwen3-Coder-30B-tools` (vLLM with the dedicated
-`qwen3_coder` parser) returns proper `tool_calls` in auto mode, so agent tools
-work. (Qwen2.5-Coder was tried first but only worked for *forced* tool calls,
-not the auto mode codecompanion uses — hence Qwen3-Coder.)
+and nothing happens. Two vLLM models return proper `tool_calls` in auto mode, so
+agent tools work:
+- **`Qwen3-Coder-30B-tools`** — coder-focused MoE, vLLM's dedicated `qwen3_coder`
+  parser. Faster (smaller). (Qwen2.5-Coder was tried first but only did *forced*
+  tool calls, not the auto mode codecompanion uses — hence Qwen3-Coder.)
+- **`gpt-oss-120b`** — OpenAI's open-weight MoE, stronger general reasoning,
+  vLLM's `openai` (harmony) tool parser. Bigger/slower but more capable.
 
-Select it for agent/editing work:
+Select one for agent/editing work:
 
 ```lua
 -- for a tools/agent chat, or via the chat buffer model picker:
-model = 'Qwen3-Coder-30B-tools'
+model = 'Qwen3-Coder-30B-tools'   -- or 'gpt-oss-120b'
 ```
 
 Notes:
@@ -398,6 +402,14 @@ quant kernel, etc.):
 > Because `healthCheckTimeout` is global and must cover this slow load, it's set
 > to 900 s in `llama-swap/config.yaml` — a stuck load can block the queue that
 > long; clear it with `docker compose up -d --force-recreate llama-swap`.
+>
+> **gpt-oss / harmony gotcha:** gpt-oss models use OpenAI's "harmony" encoding,
+> whose vocab (`o200k_base.tiktoken`) vLLM tries to *download at runtime* — which
+> fails in-container (TLS). Fix: the vocab is pre-fetched to
+> `${LLM_ROOT_PATH}/.tiktoken/` and the `gpt-oss-120b` entry sets
+> `-e TIKTOKEN_ENCODINGS_BASE=/tiktoken` with that dir mounted, so it loads
+> offline. Its MXFP4 weights load via vLLM's **MARLIN** backend (prebuilt, no
+> JIT-compile) and its tool parser is `openai`.
 
 ### Ollama
 
